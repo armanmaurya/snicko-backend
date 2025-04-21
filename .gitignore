@@ -1,0 +1,37 @@
+# Python
+*.pyc
+*.pyo
+__pycache__/
+
+# Environment
+.env
+env/
+venv/
+
+# Django
+*.sqlite3
+
+# Media
+media/
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Misc
+*.bak
+*.swp
+*.tmp
+*.~
+*.orig
+*.rej
+*.sublime-workspace
+*.sublime-project
+*.code-workspace
