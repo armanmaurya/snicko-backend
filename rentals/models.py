@@ -2,6 +2,7 @@ from django.db import models
 from django.conf import settings
 from django.utils import timezone
 from django.core.exceptions import ValidationError
+from django.contrib.gis.db import models as gis_models
 
 User = settings.AUTH_USER_MODEL
 
@@ -23,6 +24,7 @@ class Item(models.Model):
     deposit_amount = models.DecimalField(max_digits=8, decimal_places=2, default=0)
     image = models.ImageField(upload_to='item_images/')
     is_available = models.BooleanField(default=True)
+    location = gis_models.PointField(geography=True, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
