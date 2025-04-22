@@ -53,6 +53,7 @@ INSTALLED_APPS = [
     "users",
     "rest_framework",
     "rest_framework_simplejwt",
+    "rentals"
 ]
 
 AUTH_USER_MODEL = "users.CustomUser"
