@@ -38,7 +38,7 @@ A Django-powered app that lets you rent and lend items locally — from calculat
 ## ⚙️ Setup
 
 ```bash
-git clone https://github.com/yourusername/rentx.git
+git clone https://github.com/yourusername/snicko.git
 cd rentx
 python -m venv venv
 source venv/bin/activate   # or .\venv\Scripts\activate on Windows
