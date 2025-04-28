@@ -3,6 +3,7 @@ from django.conf import settings
 from django.utils import timezone
 from django.core.exceptions import ValidationError
 from django.contrib.gis.db import models as gis_models
+from datetime import datetime, date
 
 User = settings.AUTH_USER_MODEL
 
@@ -58,9 +59,15 @@ class Booking(models.Model):
         ordering = ['-created_at']
 
     def duration(self):
-        return (self.end_date - self.start_date).days + 1
+        # Ensure start_date and end_date are datetime.date objects
+        start_date = self.start_date if isinstance(self.start_date, date) else datetime.fromisoformat(self.start_date).date()
+        end_date = self.end_date if isinstance(self.end_date, date) else datetime.fromisoformat(self.end_date).date()
+        return (end_date - start_date).days + 1
 
     def clean(self):
+        # Ensure start_date and end_date are datetime.date objects
+        self.start_date = self.start_date if isinstance(self.start_date, date) else datetime.strptime(self.start_date, "%Y-%m-%d").date()
+        self.end_date = self.end_date if isinstance(self.end_date, date) else datetime.strptime(self.end_date, "%Y-%m-%d").date()
         if self.start_date < timezone.now().date():
             raise ValidationError("Start date cannot be in the past.")
         if self.end_date <= self.start_date:
@@ -71,7 +78,7 @@ class Booking(models.Model):
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return f"{self.item.name} booked by {self.renter.username}"
+        return f"{self.item.name} booked by {self.renter} from {self.start_date} to {self.end_date}"
 
 
 class DamageReport(models.Model):

@@ -1,5 +1,5 @@
 from .models import Item, Booking
-from .serializers import ItemSerializer
+from .serializers import ItemSerializer, ItemGetSerializer, BookingSerializer
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -7,6 +7,12 @@ from rest_framework.permissions import IsAuthenticated
 from django.contrib.gis.measure import D
 from django.contrib.gis.geos import Point
 from django.db import models
+from datetime import datetime
+from rest_framework.decorators import api_view, permission_classes
+from channels.layers import get_channel_layer
+from asgiref.sync import async_to_sync
+
+channel_layer = get_channel_layer()
 
 
 class ItemView(APIView):
@@ -25,7 +31,7 @@ class ItemView(APIView):
         if pk:
             try:
                 item = Item.objects.get(pk=pk)
-                serializer = ItemSerializer(item)
+                serializer = ItemGetSerializer(item)
                 return Response(serializer.data)
             except Item.DoesNotExist:
                 return Response(
@@ -57,21 +63,28 @@ class ItemView(APIView):
                     user_location = Point(longitude, latitude)
 
                     # Filter items within the radius
-                    items = items.filter(location__distance_lte=(user_location, D(km=radius)))
+                    # items = items.filter(location__distance_lte=(user_location, D(km=radius)))
 
                 except ValueError:
                     return Response(
-                        {"error": "Latitude, longitude, and radius must be valid numbers."},
+                        {
+                            "error": "Latitude, longitude, and radius must be valid numbers."
+                        },
                         status=status.HTTP_400_BAD_REQUEST,
                     )
 
             serializer = ItemSerializer(items, many=True)
+            data = serializer.data
+            # Add the owner name
+            for item_data in data:
+                item = Item.objects.get(pk=item_data["id"])
+                item_data["owner_name"] = item.owner.name if item.owner else None
             return Response(serializer.data)
 
     def post(self, request):
         serializer = ItemSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save()
+            serializer.save(owner=request.user)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -106,10 +119,10 @@ class ItemView(APIView):
                 {"error": "Item not found"}, status=status.HTTP_404_NOT_FOUND
             )
 
-    def get_permissions(self):
-        if self.request.method in ["POST", "PUT", "DELETE"]:
-            return [IsAuthenticated()]
-        return super().get_permissions()
+    # def get_permissions(self):
+    #     if self.request.method in ["POST", "PUT", "DELETE"]:
+    #         return [IsAuthenticated()]
+    #     return super().get_permissions()
 
 
 class SearchItemView(APIView):
@@ -161,12 +174,15 @@ class SearchItemView(APIView):
         user_location = Point(longitude, latitude)
 
         # Query items within the radius
-        items = Item.objects.filter(location__distance_lte=(user_location, D(km=radius)))
+        items = Item.objects.filter(
+            location__distance_lte=(user_location, D(km=radius))
+        )
 
         # Apply search query filter if provided
         if search_query:
             items = items.filter(
-                models.Q(name__icontains=search_query) | models.Q(description__icontains=search_query)
+                models.Q(name__icontains=search_query)
+                | models.Q(description__icontains=search_query)
             )
 
         if not items.exists():
@@ -184,7 +200,53 @@ class BookingView(APIView):
     """
     View for managing bookings (create, retrieve, update, delete).
     """
+
     permission_classes = [IsAuthenticated]
+
+    def send_booking_notification(self, user, booking):
+        """
+        Send a notification to the user via WebSocket
+        """
+        channel_layer = get_channel_layer()
+        group_name = f"user_{user.id}"
+
+        print(f"[DEBUG] Sending booking notification to group: {group_name}")
+
+        # Determine the notification title and body based on booking status
+        if booking.status == "PENDING":
+            title = "Booking Request Received"
+            body = f"Your booking request for {booking.item.name} from {booking.start_date} to {booking.end_date} is pending approval."
+        elif booking.status == "APPROVED":
+            title = "Booking Approved"
+            body = f"Your booking for {booking.item.name} from {booking.start_date} to {booking.end_date} has been approved."
+        elif booking.status == "REJECTED":
+            title = "Booking Rejected"
+            body = f"Your booking request for {booking.item.name} from {booking.start_date} to {booking.end_date} has been rejected."
+        elif booking.status == "ACTIVE":
+            title = "Booking Active"
+            body = f"Your booking for {booking.item.name} is now active from {booking.start_date} to {booking.end_date}."
+        elif booking.status == "COMPLETED":
+            title = "Booking Completed"
+            body = f"Your booking for {booking.item.name} from {booking.start_date} to {booking.end_date} has been completed."
+        else:
+            title = "Booking Update"
+            body = f"Your booking for {booking.item.name} has been updated."
+
+        # Notification content
+        notification_content = {
+            "title": title,
+            "body": body,
+            "redirectTo": "requestpage",
+        }
+
+        # Send the notification to the user via WebSocket
+        async_to_sync(channel_layer.group_send)(
+            group_name,
+            {
+                "type": "send_notification",  # This is the method in the consumer
+                "content": notification_content,
+            },
+        )
 
     def post(self, request, pk=None):
         """
@@ -193,13 +255,22 @@ class BookingView(APIView):
         if pk:
             try:
                 item = Item.objects.get(pk=pk)
+                # Parse ISO 8601 strings to date objects
+                start_date = datetime.fromisoformat(
+                    request.data.get("start_date")
+                ).date()
+                end_date = datetime.fromisoformat(request.data.get("end_date")).date()
+
                 booking = Booking.objects.create(
                     item=item,
                     renter=request.user,
-                    start_date=request.data.get("start_date"),
-                    end_date=request.data.get("end_date"),
+                    start_date=start_date,
+                    end_date=end_date,
                     status="PENDING",
                 )
+                print(item.owner.name, item.owner.email)
+                # Send notification to the item owner
+                self.send_booking_notification(item.owner, booking)
                 return Response(
                     {"message": "Item rented successfully", "booking_id": booking.id},
                     status=status.HTTP_201_CREATED,
@@ -207,6 +278,11 @@ class BookingView(APIView):
             except Item.DoesNotExist:
                 return Response(
                     {"error": "Item not found"}, status=status.HTTP_404_NOT_FOUND
+                )
+            except ValueError:
+                return Response(
+                    {"error": "Invalid date format. Use ISO 8601 format."},
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
         return Response(
             {"error": "Item ID is required"}, status=status.HTTP_400_BAD_REQUEST
@@ -222,12 +298,15 @@ class BookingView(APIView):
             try:
                 booking = Booking.objects.get(pk=pk)
                 # Ensure the user is either the renter or the owner of the item
-                if booking.renter != request.user and booking.item.owner != request.user:
+                if (
+                    booking.renter != request.user
+                    and booking.item.owner != request.user
+                ):
                     return Response(
                         {"error": "You do not have permission to view this booking"},
                         status=status.HTTP_403_FORBIDDEN,
                     )
-                serializer = ItemSerializer(booking)
+                serializer = BookingSerializer(booking)
                 return Response(serializer.data)
             except Booking.DoesNotExist:
                 return Response(
@@ -235,10 +314,8 @@ class BookingView(APIView):
                 )
         else:
             # Filter bookings where the user is either the renter or the owner
-            bookings = Booking.objects.filter(
-                models.Q(renter=request.user) | models.Q(item__owner=request.user)
-            )
-            serializer = ItemSerializer(bookings, many=True)
+            bookings = Booking.objects.filter(models.Q(renter=request.user))
+            serializer = BookingSerializer(bookings, many=True)
             return Response(serializer.data)
 
     def put(self, request, pk=None):
@@ -282,3 +359,102 @@ class BookingView(APIView):
             return Response(
                 {"error": "Booking not found"}, status=status.HTTP_404_NOT_FOUND
             )
+
+
+class ManageBookingStatusView(APIView):
+    """
+    View for managing the status of a booking (approve or reject).
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def send_notification(self, user, booking, status):
+        """
+        Send a WebSocket notification to the user about the booking status update.
+        """
+        channel_layer = get_channel_layer()
+        group_name = f"user_{user.id}"
+
+        if status == "APPROVED":
+            notification_content = {
+                "title": "Booking Status Updated",
+                "body": f"The status of your booking for {booking.item.name} has been updated to {booking.status}.",
+                "redirectTo": "paymentpage",
+                "booking_id": booking.id,
+            }
+        elif status == "REJECTED":
+            notification_content = {
+                "title": "Booking Request Rejected",
+                "body": f"Your booking request for {booking.item.name} from {booking.start_date} to {booking.end_date} has been rejected.",
+            }
+
+        # Send the notification to the user via WebSocket
+        async_to_sync(channel_layer.group_send)(
+            group_name,
+            {
+                "type": "send_notification",  # This is the method in the consumer
+                "content": notification_content,
+            },
+        )
+
+    def post(self, request, pk=None):
+        """
+        Update the status of a booking (approve or reject).
+        """
+        if not pk:
+            return Response(
+                {"error": "Booking ID is required"}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+        action = request.data.get("status")
+        if action not in ["APPROVED", "REJECTED"]:
+            return Response(
+                {"error": "Invalid action. Use 'APPROVED' or 'REJECTED'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            booking = Booking.objects.get(pk=pk)
+            if booking.item.owner != request.user:
+                return Response(
+                    {"error": "You do not have permission to update this booking"},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+            if action == "APPROVED":
+                booking.status = "APPROVED"
+                booking.item.is_available = False
+                booking.save()
+
+                # Reject other pending bookings for the same item
+                Booking.objects.filter(item=booking.item, status="PENDING").exclude(
+                    pk=pk
+                ).update(status="REJECTED")
+
+            elif action == "REJECTED":
+                booking.status = "REJECTED"
+                booking.save()
+
+            # Send WebSocket notification to the renter
+            self.send_notification(booking.renter, booking, action)
+
+            return Response(
+                {"message": f"Booking status updated to {action} successfully"},
+                status=status.HTTP_200_OK,
+            )
+        except Booking.DoesNotExist:
+            return Response(
+                {"error": "Booking not found"}, status=status.HTTP_404_NOT_FOUND
+            )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_item_booking_requests(request):
+    """
+    View for retrieving booking requests for the authenticated user.
+    """
+    if request.method == "GET":
+        bookings = Booking.objects.filter(item__owner=request.user, status="PENDING")
+        serializer = BookingSerializer(bookings, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
