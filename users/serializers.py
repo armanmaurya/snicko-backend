@@ -1,10 +1,10 @@
 from rest_framework import serializers
-from .models import Address
+from .models import PickUpSpot
 
 
 class AddressSerializer(serializers.ModelSerializer):
     class Meta:
-        model = Address
+        model = PickUpSpot
         fields = [
             "id",
             "user",

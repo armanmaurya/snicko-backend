@@ -27,7 +27,7 @@ class CreateOrderAPIView(APIView):
 
         # Create Razorpay Order
         razorpay_order = client.order.create({
-            'amount': int(amount) * 100,
+            'amount': int(float(amount) * 100),  # Convert to float first, then to int
             'currency': 'INR',
             'payment_capture': '1'
         })
@@ -44,7 +44,7 @@ class CreateOrderAPIView(APIView):
         return Response({
             'order_id': razorpay_order['id'],
             'razorpay_key': settings.RAZORPAY_KEY_ID,
-            'amount': int(amount) * 100,
+            'amount': int(float(amount) * 100),  # Convert to float first, then to int
             'currency': 'INR'
         }, status=status.HTTP_201_CREATED)
 

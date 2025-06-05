@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import CustomUser, Address
+from .models import CustomUser, PickUpSpot
 
 @admin.register(CustomUser)
 class CustomUserAdmin(admin.ModelAdmin):
@@ -9,4 +9,4 @@ class CustomUserAdmin(admin.ModelAdmin):
 
 
 
-admin.site.register(Address)
+admin.site.register(PickUpSpot)

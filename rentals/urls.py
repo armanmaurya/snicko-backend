@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import ItemView, BookingView, get_item_booking_requests, ManageBookingStatusView
+from .views import ItemView, BookingView, get_item_booking_requests, ManageBookingStatusView, UserItemView
 
 urlpatterns = [
     path('items/<int:pk>/', ItemView.as_view(), name='item-detail'),
@@ -8,5 +8,5 @@ urlpatterns = [
     path('bookings/', BookingView.as_view(), name='booking-list'),
     path('booking/requests/', get_item_booking_requests, name='booking-requests'),
     path('booking/update-status/<int:pk>/', ManageBookingStatusView.as_view(), name='update-booking-status'),
-    # path("all-bookings/", BookingView.as_view(), name="all-bookings"),
+    path('my-items/', UserItemView.as_view(), name='my-items'),
 ]

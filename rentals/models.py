@@ -52,6 +52,7 @@ class Booking(models.Model):
     return_photo = models.ImageField(upload_to='return_photos/', null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    rejection_reason = models.TextField(blank=True, null=True)
 
     class Meta:
         verbose_name = "Booking"

@@ -10,9 +10,24 @@ from django.db import models
 from datetime import datetime
 from rest_framework.decorators import api_view, permission_classes
 from channels.layers import get_channel_layer
-from asgiref.sync import async_to_sync
+# from asgiref.sync import async_to_sync
 
 channel_layer = get_channel_layer()
+
+class UserItemView(APIView):
+    """
+    View for retrieving items owned by the authenticated user.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        """
+        Retrieve all items owned by the authenticated user.
+        """
+        items = Item.objects.filter(owner=request.user)
+        serializer = ItemGetSerializer(items, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 class ItemView(APIView):
@@ -73,7 +88,7 @@ class ItemView(APIView):
                         status=status.HTTP_400_BAD_REQUEST,
                     )
 
-            serializer = ItemSerializer(items, many=True)
+            serializer = ItemGetSerializer(items, many=True)
             data = serializer.data
             # Add the owner name
             for item_data in data:
@@ -83,6 +98,7 @@ class ItemView(APIView):
 
     def post(self, request):
         serializer = ItemSerializer(data=request.data)
+        print(request.data)
         if serializer.is_valid():
             serializer.save(owner=request.user)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -205,12 +221,9 @@ class BookingView(APIView):
 
     def send_booking_notification(self, user, booking):
         """
-        Send a notification to the user via WebSocket
+        Send a notification to the user via FCM
         """
-        channel_layer = get_channel_layer()
-        group_name = f"user_{user.id}"
-
-        print(f"[DEBUG] Sending booking notification to group: {group_name}")
+        from rentals.services.notifications import send_fcm_notification
 
         # Determine the notification title and body based on booking status
         if booking.status == "PENDING":
@@ -232,21 +245,11 @@ class BookingView(APIView):
             title = "Booking Update"
             body = f"Your booking for {booking.item.name} has been updated."
 
-        # Notification content
-        notification_content = {
-            "title": title,
-            "body": body,
-            "redirectTo": "requestpage",
-        }
-
-        # Send the notification to the user via WebSocket
-        async_to_sync(channel_layer.group_send)(
-            group_name,
-            {
-                "type": "send_notification",  # This is the method in the consumer
-                "content": notification_content,
-            },
-        )
+        # Send the notification via FCM
+        if user.fcm_token:
+            send_fcm_notification(user.fcm_token, title, body, data={"redirectTo": "requestpage"})
+        else:
+            print(f"[DEBUG] User {user.id} does not have an FCM token.")
 
     def post(self, request, pk=None):
         """
@@ -370,32 +373,28 @@ class ManageBookingStatusView(APIView):
 
     def send_notification(self, user, booking, status):
         """
-        Send a WebSocket notification to the user about the booking status update.
+        Send a notification to the user via FCM
         """
-        channel_layer = get_channel_layer()
-        group_name = f"user_{user.id}"
+        from rentals.services.notifications import send_fcm_notification
 
         if status == "APPROVED":
-            notification_content = {
-                "title": "Booking Status Updated",
-                "body": f"The status of your booking for {booking.item.name} has been updated to {booking.status}.",
-                "redirectTo": "paymentpage",
-                "booking_id": booking.id,
-            }
+            title = "Booking Status Updated"
+            body = f"The status of your booking for {booking.item.name} has been updated to {booking.status}."
+            data = {"redirectTo": "paymentpage", "booking_id": str(booking.id)}  # Ensure values are strings
         elif status == "REJECTED":
-            notification_content = {
-                "title": "Booking Request Rejected",
-                "body": f"Your booking request for {booking.item.name} from {booking.start_date} to {booking.end_date} has been rejected.",
-            }
+            title = "Booking Request Rejected"
+            body = f"Your booking request for {booking.item.name} from {booking.start_date} to {booking.end_date} has been rejected."
+            data = {}
+        elif status == "ACTIVE":
+            title = "Booking Active"
+            body = f"Your booking for {booking.item.name} is now active from {booking.start_date} to {booking.end_date}."
+            data = {}
 
-        # Send the notification to the user via WebSocket
-        async_to_sync(channel_layer.group_send)(
-            group_name,
-            {
-                "type": "send_notification",  # This is the method in the consumer
-                "content": notification_content,
-            },
-        )
+        # Send the notification via FCM
+        if user.fcm_token:
+            send_fcm_notification(user.fcm_token, title, body, data=data)
+        else:
+            print(f"[DEBUG] User {user.id} does not have an FCM token.")
 
     def post(self, request, pk=None):
         """
@@ -407,7 +406,7 @@ class ManageBookingStatusView(APIView):
             )
 
         action = request.data.get("status")
-        if action not in ["APPROVED", "REJECTED"]:
+        if action not in ["APPROVED", "REJECTED", "ACTIVE", "COMPLETED"]:
             return Response(
                 {"error": "Invalid action. Use 'APPROVED' or 'REJECTED'."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -415,11 +414,11 @@ class ManageBookingStatusView(APIView):
 
         try:
             booking = Booking.objects.get(pk=pk)
-            if booking.item.owner != request.user:
-                return Response(
-                    {"error": "You do not have permission to update this booking"},
-                    status=status.HTTP_403_FORBIDDEN,
-                )
+            # if booking.item.owner != request.user:
+            #     return Response(
+            #         {"error": "You do not have permission to update this booking"},
+            #         status=status.HTTP_403_FORBIDDEN,
+            #     )
 
             if action == "APPROVED":
                 booking.status = "APPROVED"
@@ -433,9 +432,14 @@ class ManageBookingStatusView(APIView):
 
             elif action == "REJECTED":
                 booking.status = "REJECTED"
+                booking.rejection_reason = request.data.get("rejection_reason", "")
+                booking.save()
+            
+            elif action == "ACTIVE":
+                booking.status = "ACTIVE"
                 booking.save()
 
-            # Send WebSocket notification to the renter
+            # Send FCM notification to the renter
             self.send_notification(booking.renter, booking, action)
 
             return Response(
